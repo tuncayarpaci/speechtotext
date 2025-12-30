@@ -2,55 +2,71 @@
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <title>Tuncay Whisper Web</title>
+    <title>Whisper Canlı Kayıt Sistemi</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #f4f4f9; }
-        .container { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; width: 400px; }
-        button { padding: 12px 24px; font-size: 16px; cursor: pointer; border: none; border-radius: 8px; transition: 0.3s; margin: 10px; width: 80%; }
-        #startBtn { background: #28a745; color: white; }
-        #stopBtn { background: #dc3545; color: white; display: none; }
-        #status { margin-top: 20px; color: #555; font-style: italic; }
+        body { font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: #f4f7f6; margin: 0; }
+        .container { background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); width: 600px; }
+        .live-display { background: #34495e; color: #ecf0f1; padding: 20px; border-radius: 10px; min-height: 100px; font-size: 20px; margin-bottom: 20px; line-height: 1.4; }
+        .btn { padding: 15px; width: 100%; border-radius: 8px; border: none; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .start-btn { background: #27ae60; color: white; }
+        .stop-btn { background: #c0392b; color: white; display: none; }
+        #log-area { margin-top: 20px; border-top: 1px solid #ddd; padding-top: 10px; max-height: 150px; overflow-y: auto; font-size: 13px; color: #7f8c8d; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>Whisper Ses Kayıt</h2>
-        <button id="startBtn">Konuşmaya Başla</button>
-        <button id="stopBtn">Konuşmayı Bitir</button>
-        <div id="status">Hazır...</div>
-        <div id="result" style="margin-top:20px; word-wrap: break-word;"></div>
+        <h2 style="color: #2c3e50; text-align: center;">Canlı Konuşma Kaydı</h2>
+        <div class="live-display" id="liveText">Sizi dinlemek için hazırız...</div>
+        
+        <button id="startBtn" class="btn start-btn">Mikrofonu Aç ve Kayda Başla</button>
+        <button id="stopBtn" class="btn stop-btn">Kaydı Bitir ve Dosyaya Yaz</button>
+
+        <div id="log-area">
+            <strong>Anlık Akış Geçmişi:</strong>
+            <div id="inner-logs"></div>
+        </div>
     </div>
+
     <script>
+        let socket;
         let mediaRecorder;
-        let audioChunks = [];
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
-        const status = document.getElementById('status');
+        const liveText = document.getElementById('liveText');
+        const logs = document.getElementById('inner-logs');
 
         startBtn.onclick = async () => {
+            socket = new WebSocket(`ws://${window.location.host}/ws`);
+            
+            socket.onopen = () => {
+                liveText.innerText = "...";
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'block';
+            };
+
+            socket.onmessage = (e) => {
+                liveText.innerText = e.data;
+                const p = document.createElement('div');
+                p.innerText = "> " + e.data;
+                logs.prepend(p);
+            };
+
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             mediaRecorder = new MediaRecorder(stream);
-            audioChunks = [];
-            mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-                const formData = new FormData();
-                formData.append('file', audioBlob, 'kayit.wav');
-                status.innerText = "GPU İşleniyor...";
-                const response = await fetch('/transcribe/', { method: 'POST', body: formData });
-                const data = await response.json();
-                document.getElementById('result').innerText = "Sonuç: " + data.text;
-                status.innerText = "Tamamlandı.";
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0 && socket.readyState === WebSocket.OPEN) {
+                    socket.send(e.data);
+                }
             };
-            mediaRecorder.start();
-            startBtn.style.display = 'none';
-            stopBtn.style.display = 'inline-block';
-            status.innerText = "Dinleniyor...";
+            mediaRecorder.start(1500);
         };
+
         stopBtn.onclick = () => {
             mediaRecorder.stop();
+            socket.close();
+            startBtn.style.display = 'block';
             stopBtn.style.display = 'none';
-            startBtn.style.display = 'inline-block';
+            liveText.innerText = "Kayıt 'kayitlar' klasörüne kaydedildi.";
         };
     </script>
 </body>
