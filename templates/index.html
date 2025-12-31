@@ -2,71 +2,58 @@
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <title>Whisper Canlı Kayıt Sistemi</title>
+    <title>Whisper Pro API Test</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: #f4f7f6; margin: 0; }
-        .container { background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); width: 600px; }
-        .live-display { background: #34495e; color: #ecf0f1; padding: 20px; border-radius: 10px; min-height: 100px; font-size: 20px; margin-bottom: 20px; line-height: 1.4; }
-        .btn { padding: 15px; width: 100%; border-radius: 8px; border: none; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
-        .start-btn { background: #27ae60; color: white; }
-        .stop-btn { background: #c0392b; color: white; display: none; }
-        #log-area { margin-top: 20px; border-top: 1px solid #ddd; padding-top: 10px; max-height: 150px; overflow-y: auto; font-size: 13px; color: #7f8c8d; }
+        body { font-family: 'Inter', sans-serif; background: #f8f9fa; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: white; padding: 2rem; border-radius: 1rem; box-shadow: 0 10px 25px rgba(0,0,0,0.05); width: 100%; max-width: 500px; }
+        #live-box { background: #1e293b; color: #38bdf8; padding: 1.5rem; border-radius: 0.5rem; margin: 1rem 0; font-weight: 600; min-height: 80px; }
+        .btn { width: 100%; padding: 1rem; border: none; border-radius: 0.5rem; cursor: pointer; font-weight: bold; font-size: 1rem; }
+        .start { background: #10b981; color: white; }
+        .stop { background: #ef4444; color: white; display: none; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h2 style="color: #2c3e50; text-align: center;">Canlı Konuşma Kaydı</h2>
-        <div class="live-display" id="liveText">Sizi dinlemek için hazırız...</div>
-        
-        <button id="startBtn" class="btn start-btn">Mikrofonu Aç ve Kayda Başla</button>
-        <button id="stopBtn" class="btn stop-btn">Kaydı Bitir ve Dosyaya Yaz</button>
-
-        <div id="log-area">
-            <strong>Anlık Akış Geçmişi:</strong>
-            <div id="inner-logs"></div>
-        </div>
+    <div class="card">
+        <h2>Whisper Real-Time API</h2>
+        <div id="status" style="font-size: 0.8rem; color: #64748b;">API Key: tuncay_ozel_key_123</div>
+        <div id="live-box">Sizi dinlemek için hazır...</div>
+        <button id="btn" class="btn start">Kayda Başla</button>
     </div>
 
     <script>
         let socket;
         let mediaRecorder;
-        const startBtn = document.getElementById('startBtn');
-        const stopBtn = document.getElementById('stopBtn');
-        const liveText = document.getElementById('liveText');
-        const logs = document.getElementById('inner-logs');
+        const btn = document.getElementById('btn');
+        const box = document.getElementById('live-box');
+        const apiKey = "tuncay_ozel_key_123";
 
-        startBtn.onclick = async () => {
-            socket = new WebSocket(`ws://${window.location.host}/ws`);
-            
-            socket.onopen = () => {
-                liveText.innerText = "...";
-                startBtn.style.display = 'none';
-                stopBtn.style.display = 'block';
-            };
+        btn.onclick = async () => {
+            if (btn.classList.contains('start')) {
+                socket = new WebSocket(`ws://${window.location.host}/ws/${apiKey}`);
+                
+                socket.onmessage = (e) => {
+                    const data = JSON.parse(e.data);
+                    box.innerText = data.text;
+                };
 
-            socket.onmessage = (e) => {
-                liveText.innerText = e.data;
-                const p = document.createElement('div');
-                p.innerText = "> " + e.data;
-                logs.prepend(p);
-            };
-
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0 && socket.readyState === WebSocket.OPEN) {
-                    socket.send(e.data);
-                }
-            };
-            mediaRecorder.start(1500);
-        };
-
-        stopBtn.onclick = () => {
-            mediaRecorder.stop();
-            socket.close();
-            startBtn.style.display = 'block';
-            stopBtn.style.display = 'none';
-            liveText.innerText = "Kayıt 'kayitlar' klasörüne kaydedildi.";
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data.size > 0 && socket.readyState === WebSocket.OPEN) {
+                        socket.send(e.data);
+                    }
+                };
+                mediaRecorder.start(1500);
+                
+                btn.innerText = "Durdur";
+                btn.className = "btn stop";
+                btn.style.display = "block";
+            } else {
+                mediaRecorder.stop();
+                socket.close();
+                btn.innerText = "Kayda Başla";
+                btn.className = "btn start";
+            }
         };
     </script>
 </body>
