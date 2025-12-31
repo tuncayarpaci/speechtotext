@@ -1,92 +1,106 @@
 import os
 import uvicorn
 import io
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+import time
+import asyncio
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Depends, HTTPException, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from faster_whisper import WhisperModel
-from datetime import datetime
+from pydantic import BaseModel
+from typing import List, Optional
 
-# --- YOL AYARLARI ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
-KAYIT_KLASORU = os.path.join(BASE_DIR, "kayitlar")
+# Veritabanı fonksiyonlarını içe aktar
+from database import generate_new_key, validate_key
 
-if not os.path.exists(KAYIT_KLASORU):
-    os.makedirs(KAYIT_KLASORU)
+app = FastAPI(title="Whisper Enterprise SaaS API")
 
-# Jinja2 Şablon Ayarı
-templates = Jinja2Templates(directory=TEMPLATE_DIR)
+# --- GPU KUYRUK KİLİDİ ---
+gpu_lock = asyncio.Lock()
 
-# --- WHISPER MODEL YÜKLEME ---
-# RTX 4000 GPU'larını en verimli kullanacak int8_float16 modu
-print("Whisper Model (medium) GPU üzerinde yükleniyor...")
-model = WhisperModel("medium", device="cuda", compute_type="int8_float16")
-
-app = FastAPI()
-
-@app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    audio_buffer = bytearray()
-    son_islenen_metin = "" # Tekrarlı kayıtları önlemek için kritik değişken
+# --- GÜVENLİK (DYNAMIC AUTH) ---
+async def verify_api_key(x_api_key: str = Header(None)):
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="API Anahtarı eksik (Header: x-api-key)")
     
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Yeni canlı oturum başladı.")
+    username = validate_key(x_api_key)
+    if not username:
+        raise HTTPException(status_code=403, detail="Geçersiz API Anahtarı")
+    return username
+
+# --- MODEL YÖNETİMİ ---
+loaded_models = {}
+
+def get_model(model_size: str):
+    if model_size not in loaded_models:
+        print(f"Model yükleniyor: {model_size}...")
+        loaded_models[model_size] = WhisperModel(model_size, device="cuda", compute_type="int8_float16")
+    return loaded_models[model_size]
+
+# --- VERİ ŞEMALARI ---
+class WordInfo(BaseModel):
+    word: str
+    start: float
+    end: float
+    probability: float
+
+class TranscribeResponse(BaseModel):
+    text: str
+    model: str
+    user: str
+    queue_wait_time: float
+    processing_time: float
+    words: Optional[List[WordInfo]]
+
+# --- API ENDPOINTLERİ ---
+
+@app.post("/generate-key")
+async def create_key(username: str):
+    """Yeni bir API Anahtarı oluşturur."""
+    key = generate_new_key(username)
+    if not key:
+        raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış.")
+    return {"username": username, "api_key": key}
+
+@app.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe_file(
+    file: UploadFile = File(...), 
+    model_type: str = "medium", 
+    user: str = Depends(verify_api_key)
+):
+    """Kuyruk ve DB Doğrulamalı Transkripsiyon"""
+    arrival_time = time.time()
     
-    try:
-        while True:
-            # Tarayıcıdan gelen binary ses parçasını al
-            data = await websocket.receive_bytes()
-            audio_buffer.extend(data)
-            
-            # Bellekte işlenecek kadar veri biriktiğinde (yaklaşık 2 saniye)
-            if len(audio_buffer) > 32000:
-                try:
-                    # Mevcut tüm buffer'ı işle
-                    segments, _ = model.transcribe(
-                        io.BytesIO(audio_buffer), 
-                        language="tr",
-                        vad_filter=True,
-                        beam_size=5
-                    )
-                    
-                    # Tüm segmentleri birleştirerek tam metni oluştur
-                    full_text = " ".join([s.text for s in segments]).strip()
-                    
-                    # Eğer metin değiştiyse tarayıcıya gönder (akıcılık sağlar)
-                    if full_text and full_text != son_islenen_metin:
-                        son_islenen_metin = full_text
-                        await websocket.send_text(full_text)
-                        
-                except Exception as e:
-                    print(f"İşleme hatası: {e}")
-                    continue
-                    
-    except WebSocketDisconnect:
-        # OTURUM SONU: "Durdur"a basıldığında tetiklenir
-        if son_islenen_metin:
-            tarih_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-            dosya_adi = f"konusma_{tarih_str}.txt"
-            dosya_yolu = os.path.join(KAYIT_KLASORU, dosya_adi)
-            
-            # Sadece en son ve en kapsamlı metni temiz bir şekilde kaydet
-            with open(dosya_yolu, "w", encoding="utf-8") as f:
-                f.write(f"Kayıt Tarihi: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("-" * 40 + "\n")
-                f.write(son_islenen_metin)
-            
-            # Genel geçmiş dosyasına da ekle
-            with open(os.path.join(KAYIT_KLASORU, "tum_konusmalar.txt"), "a", encoding="utf-8") as f:
-                f.write(f"\n[{tarih_str}] {son_islenen_metin}\n")
-            
-            print(f"Oturum başarıyla kaydedildi: {dosya_adi}")
+    async with gpu_lock:
+        wait_duration = round(time.time() - arrival_time, 2)
+        start_process_time = time.time()
         
-        audio_buffer.clear()
-        print("Bağlantı kapatıldı.")
+        current_model = get_model(model_type)
+        content = await file.read()
+        
+        segments, _ = current_model.transcribe(
+            io.BytesIO(content), 
+            language="tr", 
+            word_timestamps=True,
+            vad_filter=True
+        )
+        
+        full_text = ""
+        words = []
+        for segment in segments:
+            full_text += segment.text
+            for w in segment.words:
+                words.append(WordInfo(word=w.word, start=w.start, end=w.end, probability=w.probability))
+        
+        return TranscribeResponse(
+            text=full_text.strip(),
+            model=model_type,
+            user=user,
+            queue_wait_time=wait_duration,
+            processing_time=round(time.time() - start_process_time, 2),
+            words=words
+        )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=3333)
