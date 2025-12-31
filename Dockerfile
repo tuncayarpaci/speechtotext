@@ -1,7 +1,6 @@
-# NVIDIA'nın CUDA destekli resmi imajını kullanıyoruz
 FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
 
-# Sistem paketlerini ve Python'ı kur
+# Sistem paketlerini kur
 RUN apt-get update && apt-get install -y \
     python3.10 \
     python3-pip \
@@ -10,19 +9,19 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Kütüphaneleri kopyala ve kur
+# Pip'i güncelle (Kurulum hatalarını önlemek için)
+RUN pip3 install --upgrade pip
+
+# Sadece gerekli ana kütüphaneleri kur
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Uygulama kodlarını ve klasörleri kopyala
+# Uygulama kodlarını kopyala
 COPY main_api.py .
 COPY templates/ ./templates/
 
-# Kayıtlar için klasör oluştur
 RUN mkdir -p kayitlar
 
-# Portu dış dünyaya aç
 EXPOSE 3333
 
-# Uygulamayı başlat
 CMD ["python3", "main_api.py"]
