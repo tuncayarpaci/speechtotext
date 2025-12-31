@@ -1,0 +1,16 @@
+services:
+  whisper-app:
+    build: .
+    container_name: whisper_realtime
+    ports:
+      - "3333:3333"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all # Tüm GPU'ları konteyner içine bağlar
+              capabilities: [gpu]
+    volumes:
+      - ./kayitlar:/app/kayitlar # Konteyner silinse de kayıtlar bilgisayarında kalır
+    restart: always
